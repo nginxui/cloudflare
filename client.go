@@ -22,7 +22,7 @@ func (p *Provider) createRecord(ctx context.Context, zoneInfo cfZone, record lib
 		return cfDNSRecord{}, err
 	}
 
-	reqURL := fmt.Sprintf("%s/zones/%s/dns_records", baseURL, zoneInfo.ID)
+	reqURL := fmt.Sprintf("%s/zones/%s/dns_records", p.getBaseURL(), zoneInfo.ID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(jsonBytes))
 	if err != nil {
 		return cfDNSRecord{}, err
@@ -41,7 +41,7 @@ func (p *Provider) createRecord(ctx context.Context, zoneInfo cfZone, record lib
 // updateRecord updates a DNS record. oldRec must have both an ID and zone ID.
 // Only the non-empty fields in newRec will be changed.
 func (p *Provider) updateRecord(ctx context.Context, oldRec, newRec cfDNSRecord) (cfDNSRecord, error) {
-	reqURL := fmt.Sprintf("%s/zones/%s/dns_records/%s", baseURL, oldRec.ZoneID, oldRec.ID)
+	reqURL := fmt.Sprintf("%s/zones/%s/dns_records/%s", p.getBaseURL(), oldRec.ZoneID, oldRec.ID)
 	jsonBytes, err := json.Marshal(newRec)
 	if err != nil {
 		return cfDNSRecord{}, err
@@ -80,7 +80,7 @@ func (p *Provider) getDNSRecords(ctx context.Context, zoneInfo cfZone, rec libdn
 		}
 	}
 
-	reqURL := fmt.Sprintf("%s/zones/%s/dns_records?%s", baseURL, zoneInfo.ID, qs.Encode())
+	reqURL := fmt.Sprintf("%s/zones/%s/dns_records?%s", p.getBaseURL(), zoneInfo.ID, qs.Encode())
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
 		return nil, err
@@ -125,7 +125,7 @@ func (p *Provider) getZoneInfo(ctx context.Context, zoneName string) (cfZone, er
 
 	qs := make(url.Values)
 	qs.Set("name", zoneName)
-	reqURL := fmt.Sprintf("%s/zones?%s", baseURL, qs.Encode())
+	reqURL := fmt.Sprintf("%s/zones?%s", p.getBaseURL(), qs.Encode())
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
@@ -158,6 +158,14 @@ func (p *Provider) getClient() HTTPClient {
 	return p.HTTPClient
 }
 
+// getBaseURL returns the base URL to use for API requests
+func (p *Provider) getBaseURL() string {
+	if p.BaseURL != "" {
+		return p.BaseURL
+	}
+	return "https://api.cloudflare.com/client/v4"
+}
+
 // doAPIRequest does the round trip, adding Authorization header if not already supplied.
 // It returns the decoded response from Cloudflare if successful; otherwise it returns an
 // error including error information from the API if applicable. If result is a
@@ -165,7 +173,14 @@ func (p *Provider) getClient() HTTPClient {
 // it for convenience.
 func (p *Provider) doAPIRequest(req *http.Request, result any) (cfResponse, error) {
 	if req.Header.Get("Authorization") == "" {
-		req.Header.Set("Authorization", "Bearer "+p.APIToken)
+		if p.APIToken != "" {
+			// Use API token auth (preferred)
+			req.Header.Set("Authorization", "Bearer "+p.APIToken)
+		} else if p.AuthEmail != "" && p.AuthKey != "" {
+			// Use legacy API key auth
+			req.Header.Set("X-Auth-Email", p.AuthEmail)
+			req.Header.Set("X-Auth-Key", p.AuthKey)
+		}
 	}
 
 	resp, err := p.getClient().Do(req)
@@ -197,8 +212,6 @@ func (p *Provider) doAPIRequest(req *http.Request, result any) (cfResponse, erro
 
 	return respData, err
 }
-
-const baseURL = "https://api.cloudflare.com/client/v4"
 
 func unwrapContent(content string) string {
 	if strings.HasPrefix(content, `"`) && strings.HasSuffix(content, `"`) {
